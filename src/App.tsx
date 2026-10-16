@@ -6,6 +6,7 @@ import {
   getExtensionFromMime,
   type DecodeResult,
 } from './utils/decoders';
+import { decryptPDF, isPDFEncrypted, type PDFDecryptResult } from './utils/pdfDecryptor';
 
 const ENCODINGS = [
   { value: 'auto', label: '🔍 Détection automatique', desc: 'Détecte le format automatiquement' },
@@ -37,6 +38,10 @@ function App() {
   const [copied, setCopied] = useState<number | null>(null);
   const [showInfo, setShowInfo] = useState(false);
   const [blobUrls, setBlobUrls] = useState<Map<number, string>>(new Map());
+  const [pdfPassword, setPdfPassword] = useState('');
+  const [pdfDecryptResult, setPdfDecryptResult] = useState<PDFDecryptResult | null>(null);
+  const [isPdfEncrypted, setIsPdfEncrypted] = useState(false);
+  const [isDecrypting, setIsDecrypting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Nettoyer les blob URLs au démontage
@@ -67,10 +72,12 @@ function App() {
     return url;
   }, [blobUrls]);
 
-  const handleDecode = useCallback(() => {
+  const handleDecode = useCallback(async () => {
     if (!input.trim()) {
       setResults([]);
       setDetectedEncodings([]);
+      setIsPdfEncrypted(false);
+      setPdfDecryptResult(null);
       // Nettoyer les anciens blob URLs
       blobUrls.forEach((url) => URL.revokeObjectURL(url));
       setBlobUrls(new Map());
@@ -80,14 +87,62 @@ function App() {
     const detected = detectEncoding(input);
     setDetectedEncodings(detected);
 
+    let decodeResults: DecodeResult[];
     if (selectedEncoding === 'auto') {
-      const autoResults = autoDecode(input);
-      setResults(autoResults);
+      decodeResults = autoDecode(input);
     } else {
       const result = decode(input, selectedEncoding);
-      setResults(result.success ? [result] : [{ ...result, error: result.error || 'Échec du décodage' }]);
+      decodeResults = result.success ? [result] : [{ ...result, error: result.error || 'Échec du décodage' }];
+    }
+    setResults(decodeResults);
+
+    // Vérifier si le résultat est un PDF chiffré
+    const pdfResult = decodeResults.find(r => r.isBinary && r.mimeType === 'application/pdf' && r.decodedBytes);
+    if (pdfResult && pdfResult.decodedBytes) {
+      const encrypted = await isPDFEncrypted(pdfResult.decodedBytes);
+      setIsPdfEncrypted(encrypted);
+      if (!encrypted) {
+        setPdfDecryptResult(null);
+      }
+    } else {
+      setIsPdfEncrypted(false);
+      setPdfDecryptResult(null);
     }
   }, [input, selectedEncoding, blobUrls]);
+
+  // Fonction de déchiffrement PDF
+  const handleDecryptPDF = useCallback(async () => {
+    const pdfResult = results.find(r => r.isBinary && r.mimeType === 'application/pdf' && r.decodedBytes);
+    if (!pdfResult || !pdfResult.decodedBytes || !pdfPassword) return;
+
+    setIsDecrypting(true);
+    setPdfDecryptResult(null);
+
+    try {
+      const result = await decryptPDF(pdfResult.decodedBytes, pdfPassword);
+      setPdfDecryptResult(result);
+      
+      // Si le déchiffrement a réussi, ajouter le résultat déchiffré
+      if (result.success && result.decryptedBytes) {
+        const decryptedResult: DecodeResult = {
+          success: true,
+          decoded: '[PDF Déchiffré - Protection retirée]',
+          decodedBytes: result.decryptedBytes,
+          encoding: 'PDF Déchiffré',
+          isBinary: true,
+          mimeType: 'application/pdf',
+        };
+        setResults(prev => [...prev, decryptedResult]);
+      }
+    } catch (err) {
+      setPdfDecryptResult({
+        success: false,
+        error: 'Erreur inattendue lors du déchiffrement',
+      });
+    } finally {
+      setIsDecrypting(false);
+    }
+  }, [results, pdfPassword]);
 
   const handleFileUpload = useCallback((file: File) => {
     setFileName(file.name);
@@ -163,7 +218,7 @@ function App() {
               <h1 className="text-xl font-bold bg-gradient-to-r from-purple-300 to-pink-300 bg-clip-text text-transparent">
                 Décodeur Universel
               </h1>
-              <p className="text-xs text-gray-400">Texte & Fichiers binaires • UTF-8 • 13+ formats</p>
+              <p className="text-xs text-gray-400">Texte & Fichiers binaires • UTF-8 • 13+ formats • Déchiffrement PDF</p>
             </div>
           </div>
           <button
@@ -352,6 +407,67 @@ Exemples fichiers (en Base64) :
               >
                 🔓 Décoder
               </button>
+
+              {/* Panneau de déchiffrement PDF */}
+              {isPdfEncrypted && (
+                <div className="mt-3 p-4 rounded-xl bg-red-500/10 border border-red-500/30 space-y-3 animate-in">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🔐</span>
+                    <div>
+                      <h3 className="text-sm font-semibold text-red-200">PDF Protégé Détecté</h3>
+                      <p className="text-xs text-red-300/70">Ce fichier PDF est chiffré. Entrez le mot de passe pour le déchiffrer.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={pdfPassword}
+                      onChange={(e) => setPdfPassword(e.target.value)}
+                      placeholder="Mot de passe du PDF..."
+                      className="flex-1 bg-black/40 border border-red-500/30 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-red-400 transition-colors"
+                      onKeyDown={(e) => e.key === 'Enter' && handleDecryptPDF()}
+                    />
+                    <button
+                      onClick={handleDecryptPDF}
+                      disabled={!pdfPassword || isDecrypting}
+                      className="px-4 py-2 rounded-lg bg-red-600/50 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors border border-red-500/30 whitespace-nowrap"
+                    >
+                      {isDecrypting ? (
+                        <span className="flex items-center gap-1">
+                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          ...
+                        </span>
+                      ) : (
+                        '🔓 Déchiffrer'
+                      )}
+                    </button>
+                  </div>
+                  
+                  {/* Résultat du déchiffrement */}
+                  {pdfDecryptResult && (
+                    <div className={`rounded-lg p-3 text-sm ${
+                      pdfDecryptResult.success
+                        ? 'bg-green-500/10 border border-green-500/30 text-green-300'
+                        : 'bg-red-500/10 border border-red-500/30 text-red-300'
+                    }`}>
+                      {pdfDecryptResult.success ? (
+                        <div className="flex items-center gap-2">
+                          <span>✅</span>
+                          <span>PDF déchiffré avec succès ! {pdfDecryptResult.pageCount} page(s) • Protection retirée.</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span>❌</span>
+                          <span>{pdfDecryptResult.error}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -439,9 +555,9 @@ Exemples fichiers (en Base64) :
 
         {/* Footer */}
         <footer className="mt-12 text-center text-gray-500 text-sm border-t border-gray-700/50 pt-6 pb-8">
-          <p className="font-medium text-gray-400">Décodeur Universel v3.0</p>
+          <p className="font-medium text-gray-400">Décodeur Universel v4.0</p>
           <p className="mt-1 text-xs text-gray-600">
-            Support UTF-8 • Fichiers binaires (PNG, PDF, ZIP, MP3...) • 13+ formats • Détection automatique via magic bytes
+            Support UTF-8 • Fichiers binaires (PNG, PDF, ZIP, MP3...) • 13+ formats • Déchiffrement PDF par mot de passe
           </p>
           <div className="mt-3 flex flex-wrap justify-center gap-1.5">
             {['Base64', 'URL', 'Hex', 'Binaire', 'Octal', 'ROT13', 'César', 'Morse', 'HTML', 'Unicode', 'ASCII', 'Atbash', 'Brainfuck'].map(
@@ -480,16 +596,19 @@ function ResultCard({
   const isImage = result.isBinary && result.mimeType?.startsWith('image/');
   const isAudio = result.isBinary && result.mimeType?.startsWith('audio/');
   const isPdf = result.isBinary && result.mimeType === 'application/pdf';
+  const isDecryptedPdf = result.encoding === 'PDF Déchiffré';
   const blobUrl = result.isBinary ? getBlobUrl(result, index) : null;
 
   return (
     <div
       className={`space-y-2 rounded-lg p-3 border transition-colors ${
-        result.success
-          ? result.isBinary
-            ? 'bg-orange-500/5 border-orange-500/20'
-            : 'bg-green-500/5 border-green-500/20'
-          : 'bg-red-500/5 border-red-500/20'
+        isDecryptedPdf
+          ? 'bg-emerald-500/10 border-emerald-500/30 ring-1 ring-emerald-500/20'
+          : result.success
+            ? result.isBinary
+              ? 'bg-orange-500/5 border-orange-500/20'
+              : 'bg-green-500/5 border-green-500/20'
+            : 'bg-red-500/5 border-red-500/20'
       }`}
     >
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -505,7 +624,12 @@ function ResultCard({
           >
             {result.success ? '✓' : '✗'} {result.encoding}
           </span>
-          {result.isBinary && result.mimeType && (
+          {isDecryptedPdf && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              🔓 Déchiffré
+            </span>
+          )}
+          {result.isBinary && result.mimeType && !isDecryptedPdf && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
               📦 {result.mimeType}
             </span>
@@ -528,10 +652,13 @@ function ResultCard({
           {result.success && (
             <button
               onClick={() => onDownload(result, index)}
-              className="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-white/5"
+              className={`text-xs transition-colors px-3 py-1.5 rounded-lg font-medium ${
+                isDecryptedPdf
+                  ? 'bg-emerald-600/50 hover:bg-emerald-600 text-emerald-100 border border-emerald-500/30'
+                  : 'text-gray-400 hover:text-white hover:bg-white/5'
+              }`}
             >
-              💾 Télécharger
-              {result.isBinary && ` .${getExtensionFromMime(result.mimeType || '')}`}
+              {isDecryptedPdf ? '💾 Télécharger PDF déchiffré' : `💾 Télécharger${result.isBinary ? ` .${getExtensionFromMime(result.mimeType || '')}` : ''}`}
             </button>
           )}
         </div>
@@ -567,14 +694,20 @@ function ResultCard({
 
           {/* Prévisualisation PDF */}
           {isPdf && blobUrl && (
-            <div className="rounded-lg bg-black/40 border border-orange-500/10 p-3">
+            <div className={`rounded-lg p-3 ${isDecryptedPdf ? 'bg-emerald-500/5 border border-emerald-500/20' : 'bg-black/40 border border-orange-500/10'}`}>
+              {isDecryptedPdf && (
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <span className="text-sm">🔓</span>
+                  <span className="text-xs font-medium text-emerald-300">PDF déchiffré — protection retirée</span>
+                </div>
+              )}
               <iframe
                 src={blobUrl}
-                className="w-full h-64 rounded"
-                title="PDF décodé"
+                className="w-full h-64 rounded bg-white"
+                title={isDecryptedPdf ? "PDF déchiffré" : "PDF décodé"}
               />
               <p className="text-xs text-center text-gray-400 mt-2">
-                📄 PDF • {result.decodedBytes?.length.toLocaleString()} octets
+                📄 {isDecryptedPdf ? 'PDF déchiffré' : 'PDF'} • {result.decodedBytes?.length.toLocaleString()} octets
               </p>
             </div>
           )}
