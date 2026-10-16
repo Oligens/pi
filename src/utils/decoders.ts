@@ -1,43 +1,123 @@
 // Décodeurs pour différents formats d'encodage
-// Support complet UTF-8 pour tous les formats
+// Support complet UTF-8 pour le texte ET fichiers binaires (images, PDF, ZIP, etc.)
 
 export interface DecodeResult {
   success: boolean;
-  decoded: string;
+  decoded: string;              // Texte décodé (ou placeholder si binaire)
+  decodedBytes?: Uint8Array;    // Octets bruts (indispensable pour les fichiers binaires)
   encoding: string;
   error?: string;
+  isBinary?: boolean;           // Indique si le contenu est binaire (non-texte)
+  mimeType?: string;            // Type MIME détecté pour les fichiers binaires
 }
 
-// Utilitaire pour convertir un Uint8Array en string UTF-8
-function bytesToUTF8(bytes: Uint8Array): string {
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+// ============================================================
+// UTILITAIRES
+// ============================================================
+
+// Détection du type MIME via les magic bytes
+export function detectMimeType(bytes: Uint8Array): string {
+  if (bytes.length < 4) return 'application/octet-stream';
+  
+  const header = Array.from(bytes.slice(0, 16));
+  const headerStr = String.fromCharCode(...bytes.slice(0, 8));
+  
+  // Images
+  if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) return 'image/png';
+  if (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) return 'image/jpeg';
+  if (headerStr.startsWith('GIF87a') || headerStr.startsWith('GIF89a')) return 'image/gif';
+  if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) return 'image/webp';
+  if (header[0] === 0x42 && header[1] === 0x4D) return 'image/bmp';
+  if (header[0] === 0x00 && header[1] === 0x00 && header[2] === 0x00 && header[3] === 0x0C) return 'image/x-icon';
+  
+  // Documents
+  if (header[0] === 0x25 && header[1] === 0x50 && header[2] === 0x44 && header[3] === 0x46) return 'application/pdf';
+  if (header[0] === 0x50 && header[1] === 0x4B && (header[2] === 0x03 || header[2] === 0x05)) return 'application/zip';
+  if (header[0] === 0x1F && header[1] === 0x8B) return 'application/gzip';
+  if (header[0] === 0x42 && header[1] === 0x5A && header[2] === 0x68) return 'application/x-bzip2';
+  if (header[0] === 0x37 && header[1] === 0x7A && header[2] === 0xBC && header[3] === 0xAF) return 'application/x-7z-compressed';
+  if (header[0] === 0x7F && header[1] === 0x45 && header[2] === 0x4C && header[3] === 0x46) return 'application/x-elf';
+  
+  // Audio/Vidéo
+  if (headerStr.startsWith('RIFF') && bytes[8] === 0x57 && bytes[9] === 0x41) return 'audio/wav';
+  if (header[0] === 0x4F && header[1] === 0x67 && header[2] === 0x67 && header[3] === 0x53) return 'audio/ogg';
+  if (header[0] === 0x66 && header[1] === 0x4C && header[2] === 0x61 && header[3] === 0x43) return 'audio/flac';
+  if (headerStr.startsWith('ID3') || (header[0] === 0xFF && (header[1] & 0xE0) === 0xE0)) return 'audio/mpeg';
+  
+  // Web
+  if (headerStr.startsWith('<!DOCTYPE') || headerStr.startsWith('<html') || headerStr.startsWith('<HTML')) return 'text/html';
+  if (headerStr.startsWith('<?xml')) return 'application/xml';
+  if (headerStr.startsWith('{') || headerStr.startsWith('[')) return 'application/json';
+  
+  // Exécutables
+  if (header[0] === 0x4D && header[1] === 0x5A) return 'application/x-dosexec';
+  if (header[0] === 0x7F && header[1] === 0x45 && header[2] === 0x4C && header[3] === 0x46) return 'application/x-elf';
+  
+  // Fonts
+  if (header[0] === 0x00 && header[1] === 0x01 && header[2] === 0x00 && header[3] === 0x00) return 'font/ttf';
+  if (headerStr.startsWith('wOFF')) return 'font/woff';
+  if (headerStr.startsWith('wOF2')) return 'font/woff2';
+  
+  return 'application/octet-stream';
 }
 
-// Utilitaire pour convertir une chaîne binaire en UTF-8
-function binaryStringToUTF8(binaryString: string): string {
-  const bytes = Uint8Array.from(binaryString, (char) => char.charCodeAt(0));
-  return bytesToUTF8(bytes);
+// Vérifie si un Uint8Array contient du texte UTF-8 valide
+function isValidUTF8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-// Base64 Decoder (support UTF-8 complet)
+// Convertit un Uint8Array en string UTF-8 (avec fallback)
+function bytesToString(bytes: Uint8Array): { text: string; isBinary: boolean } {
+  if (isValidUTF8(bytes)) {
+    const text = new TextDecoder('utf-8').decode(bytes);
+    // Vérifier si le texte contient trop de caractères de contrôle (signe de binaire)
+    const controlChars = (text.match(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g) || []).length;
+    const ratio = controlChars / text.length;
+    if (ratio > 0.1 && text.length > 100) {
+      return { text: `[Contenu binaire - ${bytes.length} octets]`, isBinary: true };
+    }
+    return { text, isBinary: false };
+  }
+  return { text: `[Contenu binaire - ${bytes.length} octets]`, isBinary: true };
+}
+
+// ============================================================
+// DÉCODEURS
+// ============================================================
+
+// Base64 Decoder (support texte ET fichiers binaires)
 export function decodeBase64(input: string): DecodeResult {
   try {
     const cleaned = input.trim();
-    // Validation du format Base64
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleaned) || cleaned.length % 4 !== 0) {
       return { success: false, decoded: '', encoding: 'Base64', error: 'Format Base64 invalide' };
     }
     
     const binaryString = atob(cleaned);
-    const decoded = binaryStringToUTF8(binaryString);
+    const bytes = Uint8Array.from(binaryString, (char) => char.charCodeAt(0));
     
-    return { success: true, decoded, encoding: 'Base64' };
+    const { text, isBinary } = bytesToString(bytes);
+    const mimeType = isBinary ? detectMimeType(bytes) : undefined;
+    
+    return { 
+      success: true, 
+      decoded: text, 
+      decodedBytes: bytes,
+      encoding: 'Base64',
+      isBinary,
+      mimeType
+    };
   } catch (e) {
     return { success: false, decoded: '', encoding: 'Base64', error: 'Base64 invalide' };
   }
 }
 
-// URL Encoding Decoder (support UTF-8 natif)
+// URL Encoding Decoder (texte uniquement)
 export function decodeURLEncoding(input: string): DecodeResult {
   try {
     const decoded = decodeURIComponent(input.trim());
@@ -47,7 +127,7 @@ export function decodeURLEncoding(input: string): DecodeResult {
   }
 }
 
-// Hexadecimal Decoder (support UTF-8)
+// Hexadecimal Decoder (support texte ET fichiers binaires)
 export function decodeHex(input: string): DecodeResult {
   try {
     const cleaned = input.trim().replace(/[\s,;:0x]/gi, '').replace(/^#/, '');
@@ -60,14 +140,23 @@ export function decodeHex(input: string): DecodeResult {
       bytes[i / 2] = parseInt(cleaned.substr(i, 2), 16);
     }
     
-    const decoded = bytesToUTF8(bytes);
-    return { success: true, decoded, encoding: 'Hexadecimal' };
+    const { text, isBinary } = bytesToString(bytes);
+    const mimeType = isBinary ? detectMimeType(bytes) : undefined;
+    
+    return { 
+      success: true, 
+      decoded: text, 
+      decodedBytes: bytes,
+      encoding: 'Hexadecimal',
+      isBinary,
+      mimeType
+    };
   } catch (e) {
     return { success: false, decoded: '', encoding: 'Hexadecimal', error: 'Hex invalide' };
   }
 }
 
-// Binary Decoder (support UTF-8)
+// Binary Decoder (support texte ET fichiers binaires)
 export function decodeBinary(input: string): DecodeResult {
   try {
     const cleaned = input.trim().replace(/[\s,;:]/g, '');
@@ -75,7 +164,6 @@ export function decodeBinary(input: string): DecodeResult {
       return { success: false, decoded: '', encoding: 'Binaire', error: 'Binaire invalide' };
     }
     
-    // S'assurer que la longueur est un multiple de 8
     const padded = cleaned.padStart(Math.ceil(cleaned.length / 8) * 8, '0');
     const bytes = new Uint8Array(padded.length / 8);
     
@@ -83,14 +171,23 @@ export function decodeBinary(input: string): DecodeResult {
       bytes[i / 8] = parseInt(padded.substr(i, 8), 2);
     }
     
-    const decoded = bytesToUTF8(bytes);
-    return { success: true, decoded, encoding: 'Binaire' };
+    const { text, isBinary } = bytesToString(bytes);
+    const mimeType = isBinary ? detectMimeType(bytes) : undefined;
+    
+    return { 
+      success: true, 
+      decoded: text, 
+      decodedBytes: bytes,
+      encoding: 'Binaire',
+      isBinary,
+      mimeType
+    };
   } catch (e) {
     return { success: false, decoded: '', encoding: 'Binaire', error: 'Binaire invalide' };
   }
 }
 
-// Octal Decoder (support UTF-8)
+// Octal Decoder (support texte ET fichiers binaires)
 export function decodeOctal(input: string): DecodeResult {
   try {
     const cleaned = input.trim().replace(/[\s,;:\\]/g, '');
@@ -99,24 +196,34 @@ export function decodeOctal(input: string): DecodeResult {
     }
     
     const padded = cleaned.padStart(Math.ceil(cleaned.length / 3) * 3, '0');
-    const bytes: number[] = [];
+    const bytesArr: number[] = [];
     
     for (let i = 0; i < padded.length; i += 3) {
       const value = parseInt(padded.substr(i, 3), 8);
       if (value > 255) {
         return { success: false, decoded: '', encoding: 'Octal', error: 'Valeur octal trop grande' };
       }
-      bytes.push(value);
+      bytesArr.push(value);
     }
     
-    const decoded = bytesToUTF8(new Uint8Array(bytes));
-    return { success: true, decoded, encoding: 'Octal' };
+    const bytes = new Uint8Array(bytesArr);
+    const { text, isBinary } = bytesToString(bytes);
+    const mimeType = isBinary ? detectMimeType(bytes) : undefined;
+    
+    return { 
+      success: true, 
+      decoded: text, 
+      decodedBytes: bytes,
+      encoding: 'Octal',
+      isBinary,
+      mimeType
+    };
   } catch (e) {
     return { success: false, decoded: '', encoding: 'Octal', error: 'Octal invalide' };
   }
 }
 
-// ROT13 Decoder
+// ROT13 Decoder (texte uniquement)
 export function decodeROT13(input: string): DecodeResult {
   try {
     const decoded = input.replace(/[a-zA-Z]/g, (char) => {
@@ -129,7 +236,7 @@ export function decodeROT13(input: string): DecodeResult {
   }
 }
 
-// Caesar Cipher Decoder
+// Caesar Cipher Decoder (texte uniquement)
 export function decodeCaesar(input: string, shift: number = 3): DecodeResult {
   try {
     const decoded = input.replace(/[a-zA-Z]/g, (char) => {
@@ -142,7 +249,7 @@ export function decodeCaesar(input: string, shift: number = 3): DecodeResult {
   }
 }
 
-// Morse Code Decoder
+// Morse Code Decoder (texte uniquement)
 const MORSE_CODE: Record<string, string> = {
   '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E',
   '..-.': 'F', '--.': 'G', '....': 'H', '..': 'I', '.---': 'J',
@@ -181,12 +288,10 @@ export function decodeHTMLEntities(input: string): DecodeResult {
   try {
     const trimmed = input.trim();
     
-    // Vérifier s'il y a des entités HTML
     if (!/&[#\w]+;/.test(trimmed)) {
       return { success: false, decoded: '', encoding: 'HTML Entities', error: 'Pas d\'entités HTML détectées' };
     }
     
-    // Méthode compatible navigateur
     if (typeof document !== 'undefined') {
       const textarea = document.createElement('textarea');
       textarea.innerHTML = trimmed;
@@ -194,10 +299,10 @@ export function decodeHTMLEntities(input: string): DecodeResult {
       return { success: true, decoded, encoding: 'HTML Entities' };
     }
     
-    // Fallback pour Node.js ou environnements sans DOM
+    // Fallback Node.js
     const decoded = trimmed
-      .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-      .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+      .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&amp;/g, '&')
@@ -246,7 +351,7 @@ export function decodeDecimalASCII(input: string): DecodeResult {
   }
 }
 
-// Atbash Cipher Decoder
+// Atbash Cipher Decoder (texte uniquement)
 export function decodeAtbash(input: string): DecodeResult {
   try {
     const decoded = input.replace(/[a-zA-Z]/g, (char) => {
@@ -290,7 +395,6 @@ export function decodeBrainfuck(input: string): DecodeResult {
     const loopStack: number[] = [];
     const loopMap: Record<number, number> = {};
     
-    // Pré-calculer les boucles avec validation
     for (let j = 0; j < code.length; j++) {
       if (code[j] === '[') {
         loopStack.push(j);
@@ -312,12 +416,10 @@ export function decodeBrainfuck(input: string): DecodeResult {
       iterations++;
       switch (code[i]) {
         case '>': 
-          pointer++;
-          if (pointer >= tape.length) pointer = 0;
+          pointer = (pointer + 1) % tape.length;
           break;
         case '<': 
-          pointer--;
-          if (pointer < 0) pointer = tape.length - 1;
+          pointer = (pointer - 1 + tape.length) % tape.length;
           break;
         case '+': 
           tape[pointer] = (tape[pointer] + 1) % 256; 
@@ -352,7 +454,10 @@ export function decodeBrainfuck(input: string): DecodeResult {
   }
 }
 
-// Détection automatique du format (améliorée pour éviter les faux positifs)
+// ============================================================
+// DÉTECTION AUTOMATIQUE
+// ============================================================
+
 export function detectEncoding(input: string): string[] {
   const trimmed = input.trim();
   const candidates: string[] = [];
@@ -397,7 +502,7 @@ export function detectEncoding(input: string): string[] {
     candidates.push('ASCII Décimal');
   }
 
-  // Brainfuck (validation plus stricte)
+  // Brainfuck
   const bfChars = trimmed.replace(/[^+\-<>.,\[\]]/g, '');
   if (bfChars.length > 10 && /[+\-<>.,\[\]]/.test(trimmed)) {
     candidates.push('Brainfuck');
@@ -408,14 +513,13 @@ export function detectEncoding(input: string): string[] {
     candidates.push('Octal');
   }
 
-  // ROT13, César, Atbash (seulement si le texte semble être du texte chiffré)
-  // On évite les faux positifs en ne les ajoutant pas en détection automatique
-  // Ils restent disponibles en sélection manuelle
-
   return candidates.length > 0 ? candidates : ['Base64', 'URL Encoding', 'Hexadecimal'];
 }
 
-// Fonction principale de décodage
+// ============================================================
+// FONCTIONS PRINCIPALES
+// ============================================================
+
 export function decode(input: string, encoding: string): DecodeResult {
   switch (encoding) {
     case 'Base64': return decodeBase64(input);
@@ -435,7 +539,6 @@ export function decode(input: string, encoding: string): DecodeResult {
   }
 }
 
-// Décodage en cascade (essaye tous les formats détectés)
 export function autoDecode(input: string): DecodeResult[] {
   const encodings = detectEncoding(input);
   const results: DecodeResult[] = [];
@@ -448,4 +551,35 @@ export function autoDecode(input: string): DecodeResult[] {
   }
 
   return results;
+}
+
+// Utilitaire pour obtenir l'extension de fichier à partir du MIME
+export function getExtensionFromMime(mimeType: string): string {
+  const mimeToExt: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+    'image/x-icon': 'ico',
+    'application/pdf': 'pdf',
+    'application/zip': 'zip',
+    'application/gzip': 'gz',
+    'application/x-bzip2': 'bz2',
+    'application/x-7z-compressed': '7z',
+    'audio/wav': 'wav',
+    'audio/ogg': 'ogg',
+    'audio/flac': 'flac',
+    'audio/mpeg': 'mp3',
+    'text/html': 'html',
+    'application/xml': 'xml',
+    'application/json': 'json',
+    'application/x-dosexec': 'exe',
+    'application/x-elf': 'elf',
+    'font/ttf': 'ttf',
+    'font/woff': 'woff',
+    'font/woff2': 'woff2',
+    'application/octet-stream': 'bin',
+  };
+  return mimeToExt[mimeType] || 'bin';
 }
