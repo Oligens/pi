@@ -1,3 +1,4 @@
+pub mod container;
 pub mod crypto;
 pub mod kdf;
 pub mod memory;
