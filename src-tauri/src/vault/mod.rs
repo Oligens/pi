@@ -3,7 +3,6 @@ pub mod kdf;
 pub mod memory;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -37,7 +36,6 @@ pub struct VaultConfig {
 pub struct VaultStatus {
     pub initialized: bool,
     pub unlocked: bool,
-    pub root: PathBuf,
     pub failures: u32,
     pub retry_after_ms: u64,
 }
