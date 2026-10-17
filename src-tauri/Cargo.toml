@@ -21,8 +21,11 @@ zeroize = { version = "1.8", features = ["derive"] }
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 
-[dev-dependencies]
+dev-dependencies]
 tempfile = "3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-global-shortcut = "2.4.1"
