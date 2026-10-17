@@ -19,6 +19,7 @@ aes-gcm = "0.10"
 rand = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
 base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
