@@ -9,11 +9,7 @@ use super::VaultError;
 
 pub const NONCE_LEN: usize = 12;
 
-pub fn encrypt(
-    key_bytes: &[u8; 32],
-    plaintext: &[u8],
-    aad: &[u8],
-) -> Result<Vec<u8>, VaultError> {
+pub fn encrypt(key_bytes: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, VaultError> {
     let key = Key::<Aes256Gcm>::from_slice(key_bytes);
     let cipher = Aes256Gcm::new(key);
     let mut nonce = [0u8; NONCE_LEN];
