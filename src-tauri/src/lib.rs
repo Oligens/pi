@@ -1,10 +1,17 @@
 mod vault;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::{fs, path::PathBuf, sync::Mutex, time::{Duration, Instant}};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use uuid::Uuid;
-use vault::{container, crypto, kdf, VaultConfig, VaultError, VaultQuota, VaultStatus, DEFAULT_QUOTA_BYTES};
+use vault::{
+    container, crypto, kdf, VaultConfig, VaultError, VaultQuota, VaultStatus, DEFAULT_QUOTA_BYTES,
+};
 use zeroize::Zeroizing;
 
 const MAGIC: &[u8] = b"PI-VAULT-V1";
@@ -29,15 +36,18 @@ impl Default for VaultRuntime {
     }
 }
 
+#[rustfmt::skip]
 fn vault_root(app: &AppHandle) -> Result<PathBuf, VaultError> {
     let base = app.path().app_data_dir().map_err(|_| VaultError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "app data dir unavailable")))?;
     Ok(base.join("pi-vault"))
 }
 
+#[rustfmt::skip]
 fn load_config(root: &PathBuf) -> Result<VaultConfig, VaultError> {
     serde_json::from_slice(&fs::read(root.join(HEADER_FILE))?).map_err(|_| VaultError::InvalidFormat)
 }
 
+#[rustfmt::skip]
 fn save_config(root: &PathBuf, config: &VaultConfig) -> Result<(), VaultError> {
     let tmp = root.join(format!("{HEADER_FILE}.tmp"));
     let bytes = serde_json::to_vec_pretty(config).map_err(|_| VaultError::InvalidFormat)?;
@@ -46,11 +56,13 @@ fn save_config(root: &PathBuf, config: &VaultConfig) -> Result<(), VaultError> {
     Ok(())
 }
 
+#[rustfmt::skip]
 fn current_key(state: &State<'_, VaultRuntime>) -> Result<Zeroizing<[u8; 32]>, String> {
     let key = state.key.lock().map_err(|_| "state poisoned".to_string())?;
     key.as_ref().cloned().ok_or_else(|| VaultError::Locked.to_string())
 }
 
+#[rustfmt::skip]
 fn quota_for(root: &PathBuf, key: &Zeroizing<[u8; 32]>, quota_bytes: u64) -> Result<VaultQuota, VaultError> {
     let manifest = container::load_manifest(root, key)?;
     let used_bytes = manifest.entries.iter().try_fold(0u64, |sum, entry| sum.checked_add(entry.size).ok_or(VaultError::InvalidFormat))?;
@@ -60,6 +72,7 @@ fn quota_for(root: &PathBuf, key: &Zeroizing<[u8; 32]>, quota_bytes: u64) -> Res
     Ok(VaultQuota { quota_bytes, used_bytes, free_bytes, usage_percent })
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_status(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<VaultStatus, String> {
     let root = vault_root(&app).map_err(|e| e.to_string())?;
@@ -70,6 +83,7 @@ fn vault_status(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<VaultS
     Ok(VaultStatus { initialized, unlocked, failures, retry_after_ms })
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_initialize(app: AppHandle, password: String, state: State<'_, VaultRuntime>) -> Result<(), String> {
     if password.is_empty() { return Err("password must not be empty".into()); }
@@ -87,6 +101,7 @@ fn vault_initialize(app: AppHandle, password: String, state: State<'_, VaultRunt
     Ok(())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_unlock(app: AppHandle, password: String, state: State<'_, VaultRuntime>) -> Result<(), String> {
     if password.is_empty() { return Err("invalid credentials".into()); }
@@ -113,12 +128,14 @@ fn vault_unlock(app: AppHandle, password: String, state: State<'_, VaultRuntime>
     }
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_lock(state: State<'_, VaultRuntime>) -> Result<(), String> {
     *state.key.lock().map_err(|_| "state poisoned".to_string())? = None;
     Ok(())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_quota(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<VaultQuota, String> {
     let key = current_key(&state)?;
@@ -128,6 +145,7 @@ fn vault_quota(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<VaultQu
     quota_for(&root, &key, config.quota_bytes).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_set_quota(app: AppHandle, state: State<'_, VaultRuntime>, quota_bytes: u64) -> Result<VaultQuota, String> {
     if quota_bytes < 1024 * 1024 { return Err(VaultError::InvalidQuota.to_string()); }
@@ -142,6 +160,7 @@ fn vault_set_quota(app: AppHandle, state: State<'_, VaultRuntime>, quota_bytes: 
     quota_for(&root, &key, quota_bytes).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_import_bytes(app: AppHandle, state: State<'_, VaultRuntime>, name: String, data: Vec<u8>) -> Result<String, String> {
     let key = current_key(&state)?;
@@ -159,6 +178,7 @@ fn vault_import_bytes(app: AppHandle, state: State<'_, VaultRuntime>, name: Stri
     Ok(id)
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_list(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<Vec<(String, String, u64)>, String> {
     let key = current_key(&state)?;
@@ -168,6 +188,7 @@ fn vault_list(app: AppHandle, state: State<'_, VaultRuntime>) -> Result<Vec<(Str
     manifest.entries.into_iter().map(|e| { let name = container::decrypt_name(&key, &e.encrypted_name).map_err(|x| x.to_string())?; Ok((e.id, name, e.size)) }).collect()
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_export_bytes(app: AppHandle, state: State<'_, VaultRuntime>, id: String) -> Result<Vec<u8>, String> {
     let key = current_key(&state)?;
@@ -179,6 +200,7 @@ fn vault_export_bytes(app: AppHandle, state: State<'_, VaultRuntime>, id: String
     container::read_and_decrypt(&root, &key, entry, &name).map(|p| p.to_vec()).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_delete(app: AppHandle, state: State<'_, VaultRuntime>, id: String) -> Result<(), String> {
     let key = current_key(&state)?;
@@ -192,18 +214,21 @@ fn vault_delete(app: AppHandle, state: State<'_, VaultRuntime>, id: String) -> R
     container::save_manifest_atomic(&root, &key, &manifest).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_encrypt_bytes(state: State<'_, VaultRuntime>, name: String, data: Vec<u8>) -> Result<Vec<u8>, String> {
     let key = current_key(&state)?;
     crypto::encrypt(&key, &data, name.as_bytes()).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[tauri::command]
 fn vault_decrypt_bytes(state: State<'_, VaultRuntime>, name: String, envelope: Vec<u8>) -> Result<Vec<u8>, String> {
     let key = current_key(&state)?;
     crypto::decrypt(&key, &envelope, name.as_bytes()).map(|p| p.to_vec()).map_err(|e| e.to_string())
 }
 
+#[rustfmt::skip]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
