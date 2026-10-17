@@ -3,6 +3,9 @@ pub mod crypto;
 pub mod kdf;
 pub mod memory;
 
+#[cfg(test)]
+mod container_tests;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
