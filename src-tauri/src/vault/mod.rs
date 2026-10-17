@@ -11,7 +11,9 @@ use thiserror::Error;
 
 pub const DEFAULT_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
 
-fn default_quota_bytes() -> u64 { DEFAULT_QUOTA_BYTES }
+fn default_quota_bytes() -> u64 {
+    DEFAULT_QUOTA_BYTES
+}
 
 #[derive(Debug, Error)]
 pub enum VaultError {
