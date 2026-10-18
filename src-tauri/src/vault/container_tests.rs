@@ -8,14 +8,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let key = kdf::derive_key(b"test-password", &[7u8; 32]).unwrap();
-        let entry = container::encrypt_and_store(
-            root,
-            &key,
-            "abc123",
-            "secret.txt",
-            b"classified",
-        )
-        .unwrap();
+        let entry = container::encrypt_and_store(root, &key, "abc123", "secret.txt", b"classified")
+            .unwrap();
         let mut manifest = container::Manifest::default();
         manifest.entries.push(entry.clone());
         container::save_manifest_atomic(root, &key, &manifest).unwrap();
@@ -37,9 +31,7 @@ mod tests {
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         fs::write(&path, bytes).unwrap();
-        assert!(
-            container::read_and_decrypt(root, &key, &loaded.entries[0], "secret.txt").is_err()
-        );
+        assert!(container::read_and_decrypt(root, &key, &loaded.entries[0], "secret.txt").is_err());
     }
 
     #[test]
