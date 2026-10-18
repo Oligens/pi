@@ -1,0 +1,42 @@
+name: Vault Security
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-vault:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and tests
+        run: cargo test --all-targets
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Dependency audit
+        run: cargo install cargo-audit --locked && cargo audit
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
